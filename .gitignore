@@ -1,0 +1,17 @@
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+.DS_Store
+.env
+.Renviron
+credentials.R
+rsconnect/
+.vscode/
+.idea/
+*.swp
+*.swo
+__pycache__/
+*.pyc
+# Logs
+*.log
