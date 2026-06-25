@@ -1,93 +1,45 @@
-
 packages <- c(
-  # Data manipulation & wrangling
-  "tidyverse",         # ggplot2, dplyr, tidyr, readr, etc.
-  "data.table",        # Fast data manipulation
-  "janitor",           # Data cleaning utilities
-  
-  # Database
-  "RPostgres",         # PostgreSQL connection
-  "DBI",               # Database interface
-  
-  # Statistical modeling
-  "glm2",              # Enhanced GLM functions
-  "car",               # VIF, diagnostics
-  "lmtest",            # Model testing
-  
-  # Machine learning
-  "xgboost",           # Gradient boosting
-  "caret",             # ML framework
-  "mltools",           # Additional ML tools
-  
-  # Model evaluation
-  "ROCR",              # ROC/AUC curves
-  "ModelMetrics",      # Gini, KS, lift
-  "ConfusionMatrix",   # Confusion matrix utilities
-  
-  # Explainability
-  "SHAP",              # SHAP values
-  "shapr",             # SHAP explanations
-  "lime",              # Local explanations
-  
-  # Credit-specific
-  "scorecard",         # Scorecard generation (WOE, IV)
-  
-  # Visualization
-  "ggplot2",           # Already in tidyverse, explicit for clarity
-  "plotly",            # Interactive plots
-  "DT",                # Interactive tables (Shiny)
-  "gridExtra",         # Multi-plot layouts
-  
+  # Core data work 
+  "tidyverse",     # dplyr, ggplot2, readr, tidyr, etc.
+  "data.table",    # fast reading/handling of the large CSVs
+  "janitor",       # quick data cleaning helpers
+
+  # Database (R <-> PostgreSQL) 
+  "DBI",           # generic database interface
+  "RPostgres",     # the PostgreSQL driver
+
+  # Modeling 
+  "xgboost",       # gradient boosting (comparison model)
+  "car",           # VIF / multicollinearity checks
+  "ROCR",          # ROC curves and AUC
+
+  # Credit-specific 
+  "scorecard",     # WOE binning, Information Value, scorecard tools
+
+  # Reporting 
+  "rmarkdown",     # render the analysis notebooks
+  "knitr",         # used by rmarkdown
+  "DT",            # interactive tables (also used in Shiny)
+  "plotly",        # interactive charts
+
   # Shiny
-  "shiny",             # Web app framework
-  "shinydashboard",    # Dashboard layouts
-  "shinybusy",         # Loading indicators
-  "bslib",             # Bootstrap themes
-  
-  # Reporting & documentation
-  "rmarkdown",         # R markdown
-  "knitr",             # Dynamic documents
-  "kableExtra",        # Enhanced tables
-  
-  # Testing
-  "testthat",          # Unit testing
-  
+  "shiny",
+  "shinydashboard",
+
   # Utilities
-  "here",              # Path management
-  "dotenv",            # Environment variables
-  "glue",              # String interpolation
-  "lubridate"          # Date/time handling
+  "here",          # tidy file paths within the project
+  "scales"         # nice axis labels and percentages
 )
 
-# Install missing packages only
-new_packages <- packages[!(packages %in% installed.packages()[,"Package"])]
-if(length(new_packages) > 0) {
-  install.packages(new_packages, dependencies = TRUE)
-  cat("✓ Installed:", length(new_packages), "new packages\n")
+# Install only the ones you don't already have
+to_install <- packages[!(packages %in% installed.packages()[, "Package"])]
+
+if (length(to_install) > 0) {
+  message("Installing ", length(to_install), " package(s): ",
+          paste(to_install, collapse = ", "))
+  install.packages(to_install)
 } else {
-  cat("✓ All packages already installed\n")
+  message("All required packages are already installed.")
 }
 
-# Load core packages for immediate use
-library(tidyverse)
-library(data.table)
-library(DBI)
-library(RPostgres)
-library(xgboost)
-library(caret)
-library(ROCR)
-library(shiny)
-library(rmarkdown)
-
-cat("Core packages loaded. Ready to start!\n")
-
-devtools::install_github("cran/scorecard")  # If CRAN version lags
-devtools::install_github("ModelOriented/DALEX")  # Advanced explainability
-
-# Verify key packages
-cat("\nPackage Versions:\n")
-packages_check <- c("tidyverse", "xgboost", "shiny", "RPostgres", "caret")
-for(pkg in packages_check) {
-  ver <- packageVersion(pkg)
-  cat(paste0(pkg, ": ", ver, "\n"))
-}
+message("\nDone. You can now load packages with library(), e.g. library(tidyverse).")

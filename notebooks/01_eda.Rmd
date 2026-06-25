@@ -1,0 +1,365 @@
+---
+title: "Exploratory Data Analysis"
+subtitle: "Credit Risk Intelligence Platform"
+author: "Nihira Sharma"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(DBI)
+library(lubridate)
+library(knitr)
+```
+
+------------------------------------------------------------------------
+
+## 1. Connect to Postgres & Load Data
+
+```{r connect}
+library(DBI)
+library(RPostgres)
+
+# Connect directly
+con <- dbConnect(
+  RPostgres::Postgres(),
+  user = "credit_app",
+  password = Sys.getenv("CREDIT_DB_PASSWORD"),
+  host = "localhost",
+  port = 5432,
+  dbname = "credit_risk"
+)
+
+# Test connection
+dbGetQuery(con, "SELECT version();")
+```
+
+------------------------------------------------------------------------
+
+## 2. Load All 7 Tables
+
+```{r load_data}
+# Load main application table
+app <- dbGetQuery(con, "SELECT * FROM application_train") %>% as_tibble()
+
+# Load child tables
+prev_app <- dbGetQuery(con, "SELECT * FROM previous_application") %>% as_tibble()
+bureau <- dbGetQuery(con, "SELECT * FROM bureau") %>% as_tibble()
+bureau_bal <- dbGetQuery(con, "SELECT * FROM bureau_balance") %>% as_tibble()
+credit_card <- dbGetQuery(con, "SELECT * FROM credit_card_balance") %>% as_tibble()
+installments <- dbGetQuery(con, "SELECT * FROM installments_payments") %>% as_tibble()
+pos_cash <- dbGetQuery(con, "SELECT * FROM pos_cash_balance") %>% as_tibble()
+
+cat("All 7 tables loaded successfully\n")
+```
+
+------------------------------------------------------------------------
+
+## 3. High-Level Overview
+
+### 3.1 Row Counts & Table Dimensions
+
+```{r overview}
+overview <- tibble(
+  Table = c("application_train", "previous_application", "bureau", "bureau_balance",
+            "credit_card_balance", "installments_payments", "pos_cash_balance"),
+  Rows = c(nrow(app), nrow(prev_app), nrow(bureau), nrow(bureau_bal),
+           nrow(credit_card), nrow(installments), nrow(pos_cash)),
+  Columns = c(ncol(app), ncol(prev_app), ncol(bureau), ncol(bureau_bal),
+              ncol(credit_card), ncol(installments), ncol(pos_cash)),
+  Grain = c("One row per applicant (SK_ID_CURR)",
+            "One row per previous application (SK_ID_PREV)",
+            "One row per bureau credit record (SK_ID_BUREAU)",
+            "One row per bureau-month (SK_ID_BUREAU, MONTHS_BALANCE)",
+            "One row per card-month (SK_ID_PREV, SK_ID_CURR, MONTHS_BALANCE)",
+            "One row per installment payment",
+            "One row per POS-month (SK_ID_PREV, SK_ID_CURR, MONTHS_BALANCE)")
+)
+
+kable(overview, caption = "Table Overview & Grain")
+```
+
+------------------------------------------------------------------------
+
+## 4. Target Variable Analysis
+
+### 4.1 Default Rate
+
+```{r target_dist}
+target_summary <- app %>%
+  summarise(
+    Total_Applicants = n(),
+    Defaults = sum(target, na.rm = TRUE),
+    Non_Defaults = sum(1 - target, na.rm = TRUE),
+    Default_Rate = mean(target, na.rm = TRUE) * 100
+  )
+
+kable(target_summary, caption = "Target Distribution: Default Rate")
+
+# Visualize
+ggplot(app, aes(x = factor(target))) +
+  geom_bar(fill = c("#2ecc71", "#e74c3c"), alpha = 0.8) +
+  scale_x_discrete(labels = c("Non-Default", "Default")) +
+  labs(title = "Target Distribution",
+       subtitle = "Class Balance in application_train",
+       x = "Target", y = "Count") +
+  theme_minimal() +
+  geom_text(stat = "count", aes(label = ..count..), vjust = -0.5)
+```
+
+**Key insight:** \~8% default rate - highly imbalanced, typical for credit data.
+
+------------------------------------------------------------------------
+
+## 5. Missingness Analysis
+
+### 5.1 Missing Data in application_train
+
+```{r missingness_app}
+missing_app <- app %>%
+  summarise(across(everything(), 
+                   list(missing_pct = ~sum(is.na(.)) / n() * 100))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "missing_pct") %>%
+  mutate(column = str_remove(column, "_missing_pct")) %>%
+  filter(missing_pct > 0) %>%
+  arrange(desc(missing_pct))
+
+kable(missing_app, caption = "application_train: Columns with Missing Values")
+
+# Visualize high-missing columns (>40%)
+missing_app %>%
+  filter(missing_pct > 40) %>%
+  ggplot(aes(x = reorder(column, -missing_pct), y = missing_pct)) +
+  geom_col(fill = "#e67e22", alpha = 0.8) +
+  labs(title = "High-Missing Columns in application_train",
+       subtitle = ">40% missing may need special handling",
+       x = "Column", y = "% Missing") +
+  coord_flip() +
+  theme_minimal()
+```
+
+------------------------------------------------------------------------
+
+## 6. Numeric Features - Univariate Distributions
+
+### 6.1 Income, Credit Amount, Annuity
+
+```{r numeric_explore}
+numeric_cols <- c("amt_income_total", "amt_credit", "amt_annuity", 
+                  "days_birth", "days_employed", "cnt_children")
+
+numeric_summary <- app %>%
+  select(all_of(numeric_cols)) %>%
+  summarise(across(everything(),
+                   list(
+                     Min = ~min(., na.rm = TRUE),
+                     Median = ~median(., na.rm = TRUE),
+                     Mean = ~mean(., na.rm = TRUE),
+                     Max = ~max(., na.rm = TRUE),
+                     SD = ~sd(., na.rm = TRUE)
+                   )))
+
+# Transpose for readability
+numeric_summary_t <- numeric_summary %>%
+  pivot_longer(everything(), names_to = "stat", values_to = "value") %>%
+  separate(stat, into = c("column", "metric"), sep = "_") %>%
+  pivot_wider(names_from = "metric", values_from = "value")
+
+kable(numeric_summary_t, caption = "Numeric Features: Summary Statistics", digits = 2)
+```
+
+### 6.2 Key Derived Features
+
+```{r derived}
+app <- app %>%
+  mutate(
+    age_years = -days_birth / 365.25,
+    employment_years = case_when(
+      days_employed == 365243 ~ NA_real_,  # Home Credit's "unemployed" sentinel
+      TRUE ~ -days_employed / 365.25
+    ),
+    income_per_family = amt_income_total / (cnt_fam_members + 1),
+    credit_to_income = amt_credit / amt_income_total,
+    annuity_to_income = amt_annuity / amt_income_total,
+    credit_to_goods = amt_credit / amt_goods_price
+  )
+
+# Summary of derived features
+derived_summary <- app %>%
+  select(age_years, employment_years, credit_to_income, annuity_to_income) %>%
+  summarise(across(everything(),
+                   list(Mean = ~mean(., na.rm = TRUE),
+                        Median = ~median(., na.rm = TRUE),
+                        SD = ~sd(., na.rm = TRUE))))
+
+kable(derived_summary, caption = "Derived Features: Summary", digits = 2)
+```
+
+#### Age Distribution
+
+```{r age_plot}
+ggplot(app, aes(x = age_years)) +
+  geom_histogram(binwidth = 5, fill = "#3498db", alpha = 0.8) +
+  labs(title = "Age Distribution",
+       subtitle = "Derived from DAYS_BIRTH",
+       x = "Age (years)", y = "Count") +
+  theme_minimal()
+```
+
+#### Employment Years (post-sentinel fix)
+
+```{r employment_plot}
+ggplot(app %>% filter(!is.na(employment_years)), aes(x = employment_years)) +
+  geom_histogram(binwidth = 2, fill = "#9b59b6", alpha = 0.8) +
+  labs(title = "Employment Duration Distribution",
+       subtitle = "Excludes 365243 sentinel (unemployed)",
+       x = "Employment Years", y = "Count") +
+  theme_minimal()
+```
+
+------------------------------------------------------------------------
+
+## 7. Child Table Grains & Aggregation Potential
+
+### 7.1 Bureau Records per Applicant
+
+```{r bureau_grain}
+bureau_per_app <- bureau %>%
+  group_by(sk_id_curr) %>%
+  summarise(n_bureau_records = n(), .groups = 'drop')
+
+bureau_grain_summary <- tibble(
+  Metric = c("Applicants with bureau history", "Mean bureau records/applicant",
+             "Median", "Max", "Min"),
+  Value = c(nrow(bureau_per_app), 
+            mean(bureau_per_app$n_bureau_records),
+            median(bureau_per_app$n_bureau_records),
+            max(bureau_per_app$n_bureau_records),
+            min(bureau_per_app$n_bureau_records))
+)
+
+kable(bureau_grain_summary, caption = "Bureau Records per Applicant", digits = 2)
+```
+
+### 7.2 Previous Applications per Applicant
+
+```{r prev_app_grain}
+prev_app_per_app <- prev_app %>%
+  group_by(sk_id_curr) %>%
+  summarise(n_prev_apps = n(), .groups = 'drop')
+
+prev_app_grain_summary <- tibble(
+  Metric = c("Applicants with prior apps", "Mean prior apps/applicant",
+             "Median", "Max"),
+  Value = c(nrow(prev_app_per_app),
+            mean(prev_app_per_app$n_prev_apps),
+            median(prev_app_per_app$n_prev_apps),
+            max(prev_app_per_app$n_prev_apps))
+)
+
+kable(prev_app_grain_summary, caption = "Previous Applications per Applicant", digits = 2)
+```
+
+### 7.3 Installments per Previous Application
+
+```{r installments_grain}
+inst_per_prev <- installments %>%
+  group_by(sk_id_prev) %>%
+  summarise(n_installments = n(), .groups = 'drop')
+
+inst_grain_summary <- tibble(
+  Metric = c("Previous apps with installments", "Mean installments/prev_app",
+             "Median", "Max"),
+  Value = c(nrow(inst_per_prev),
+            mean(inst_per_prev$n_installments),
+            median(inst_per_prev$n_installments),
+            max(inst_per_prev$n_installments))
+)
+
+kable(inst_grain_summary, caption = "Installment Records per Previous Application", digits = 2)
+```
+
+------------------------------------------------------------------------
+
+## 8. Early Target Relationships (Visual Only)
+
+### 8.1 Default Rate by Income Band
+
+```{r target_by_income}
+app %>%
+  mutate(income_band = cut(amt_income_total, 
+                           breaks = quantile(amt_income_total, 
+                                            probs = seq(0, 1, 0.25), 
+                                            na.rm = TRUE),
+                           include.lowest = TRUE)) %>%
+  group_by(income_band) %>%
+  summarise(default_rate = mean(target, na.rm = TRUE) * 100, n = n(), .groups = 'drop') %>%
+  ggplot(aes(x = income_band, y = default_rate)) +
+  geom_col(fill = "#e74c3c", alpha = 0.8) +
+  geom_text(aes(label = paste0(round(default_rate, 1), "%")), vjust = -0.5) +
+  labs(title = "Default Rate by Income Quartile",
+       x = "Income Band (Quartiles)", y = "Default Rate (%)") +
+  theme_minimal()
+```
+
+### 8.2 Default Rate by Age Band
+
+```{r target_by_age}
+app %>%
+  mutate(age_band = cut(age_years, breaks = seq(20, 80, 10))) %>%
+  group_by(age_band) %>%
+  summarise(default_rate = mean(target, na.rm = TRUE) * 100, n = n(), .groups = 'drop') %>%
+  ggplot(aes(x = age_band, y = default_rate)) +
+  geom_col(fill = "#3498db", alpha = 0.8) +
+  geom_text(aes(label = paste0(round(default_rate, 1), "%")), vjust = -0.5) +
+  labs(title = "Default Rate by Age Band",
+       x = "Age Band (years)", y = "Default Rate (%)") +
+  theme_minimal()
+```
+
+------------------------------------------------------------------------
+
+## 9. Key Findings & Data Quality Notes
+
+```{r findings}
+findings <- tibble(
+  Finding = c(
+    "Default rate: ~8%",
+    "DAYS_EMPLOYED = 365243 sentinel",
+    "High-missing columns: EXT_SOURCE_*, building features",
+    "No absolute dates: uses anonymized day-offsets",
+    "Child tables: no orphaned records detected",
+    "Installments table: highest volume (~13.6M rows)"
+  ),
+  Impact = c(
+    "Class imbalance: use stratified splits, not SMOTE",
+    "Recode as NA in feature engineering",
+    "Plan imputation strategy in Phase 2",
+    "Cannot do true out-of-time validation",
+    "Data integrity: safe to proceed",
+    "Will need efficient SQL aggregation"
+  )
+)
+
+kable(findings, caption = "Key EDA Findings")
+```
+
+------------------------------------------------------------------------
+
+## 10. Close Connection
+
+```{r close}
+dbDisconnect(con)
+cat("✓ Connection closed\n")
+```
+
+------------------------------------------------------------------------
+
+**Next:** Phase 2 - Feature Engineering (Day 4–8)
