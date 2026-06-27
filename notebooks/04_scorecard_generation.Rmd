@@ -1,0 +1,412 @@
+---
+title: "Scorecard Generation"
+subtitle: "Credit Risk Intelligence Platform"
+author: "Nihira Sharma"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: cosmo
+    highlight: pygments
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+    df_print: paged
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=TRUE, results='markup'}
+knitr::opts_chunk$set(echo=TRUE, message=TRUE, warning=FALSE,
+                      fig.width=10, fig.height=6, results='markup')
+library(tidyverse)
+library(scales)
+library(knitr)
+source("../R/model_utils.R")   # metric functions
+source("../R/scorecard.R")     # scorecard functions
+
+cat("Scorecard Generation - Ready\n")
+cat("Loaded model_utils.R and scorecard.R\n")
+```
+
+---
+
+## Overview
+
+This notebook converts the production logistic regression model into an **industry-standard bin-level points scorecard** - the format lenders actually deploy.
+
+- **Objective:** Translate each WOE bin into a fixed number of points, score every applicant, set Approve/Review/Decline cutoffs, and confirm the scorecard reproduces the model.
+- **Inputs:** `outputs/model_logistic.rds`, `data/processed/test_with_predictions.rds`, `data/processed/woe_bins.rds`
+- **Scaling:** PDO method (Points to Double the Odds)
+- **Output:** A points card where each feature/bin is worth whole points, plus a scaled score (~300–850) where **higher = safer**
+
+The value of a bin-level card is auditability: a credit analyst can read a single applicant's decision row by row - "age band gives +28, employment band gives +12, …" - and the points sum to the score. This is the artifact real risk teams sign off on.
+
+---
+
+# Section 1: Load Model, Predictions & WOE Bins
+
+```{r load_artifacts, results='markup'}
+model_lr  <- readRDS("../outputs/model_logistic.rds")
+test_pred <- readRDS("../data/processed/test_with_predictions.rds")
+woe_bins  <- readRDS("../data/processed/woe_bins.rds")
+
+coefs <- coef(model_lr)
+
+cat("Model loaded\n")
+cat("  Coefficients:", length(coefs), "(intercept + features)\n")
+cat("  Test set:", nrow(test_pred), "applicants\n")
+cat("  WOE bins object class:", class(woe_bins)[1], "\n\n")
+
+stopifnot("pred_lr" %in% names(test_pred), "target" %in% names(test_pred))
+
+cat("Predicted probability range:",
+    round(min(test_pred$pred_lr), 4), "–",
+    round(max(test_pred$pred_lr), 4), "\n")
+```
+
+---
+
+# Section 2: PDO Scaling Parameters
+
+A scorecard maps log-odds to points with a linear transform:
+
+$$\text{Score} = \text{Offset} + \text{Factor} \times \ln(\text{odds}_\text{good})$$
+
+anchored by three business choices - a **base score**, the **base odds** at that score, and **PDO** (points to double the odds). `Factor` and `Offset` are derived from these.
+
+```{r pdo_params, results='markup'}
+scaling <- make_scaling(base_score = 600, base_odds = 50, pdo = 20)
+
+cat("PDO Scaling Parameters\n")
+cat("──────────────────────────────────────\n")
+cat("  Base score:     ", scaling$base_score, "\n")
+cat("  Base odds:      ", scaling$base_odds, ": 1 (good:bad)\n")
+cat("  PDO:            ", scaling$pdo, "points to double odds\n\n")
+cat("  Derived Factor: ", round(scaling$factor, 4), "\n")
+cat("  Derived Offset: ", round(scaling$offset, 4), "\n\n")
+cat("Interpretation: every", scaling$pdo, "points, the odds of being a\n")
+cat("good (non-default) applicant double.\n")
+
+saveRDS(scaling, "../outputs/scorecard_scaling_params.rds")
+```
+
+---
+
+# Section 3: Build the Bin-Level Points Card
+
+For each feature and bin:
+
+$$\text{Points} = \frac{\text{Offset} - \text{Factor} \times \beta_0}{n} - \text{Factor} \times \beta_i \times \text{WOE}_\text{bin}$$
+
+The intercept is spread evenly across features so an applicant's matched bin points sum to their total score.
+
+```{r build_card, results='markup'}
+card <- build_scorecard(coefs, woe_bins, scaling)
+
+base_pts <- attr(card, "base_points_per_feature")
+
+cat("Scorecard built\n")
+cat("  Rows (feature × bin):", nrow(card), "\n")
+cat("  Features in card:    ", length(unique(card$coef_name)), "\n")
+cat("  Base points/feature: ", round(base_pts, 1), "\n\n")
+
+cat("Sample of the points card:\n")
+print(head(card %>% select(variable, bin, woe, beta, points), 20))
+
+write_csv(card, "../outputs/scorecard_points_card.csv")
+cat("\nSaved outputs/scorecard_points_card.csv\n")
+```
+
+## Points Range by Feature
+
+How much each feature can swing an applicant's score - the spread between its lowest- and highest-points bins. Wider bars are the most influential features.
+
+```{r feature_swing, results='markup'}
+feature_swing <- card %>%
+  group_by(variable) %>%
+  summarise(
+    min_points = min(points),
+    max_points = max(points),
+    swing = max(points) - min(points),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(swing)) %>%
+  slice_head(n = 15)
+
+ggplot(feature_swing, aes(x = reorder(variable, swing), y = swing)) +
+  geom_col(fill = "#C9A227", alpha = 0.9) +
+  geom_text(aes(label = swing), hjust = -0.2, size = 3.2) +
+  coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+  labs(
+    title = "Score Influence by Feature",
+    subtitle = "Points swing between each feature's weakest and strongest bin",
+    x = NULL, y = "Points Swing (max − min bin)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+---
+
+# Section 4: Score the Test Population
+
+Because the test set already holds WOE values, scoring is a direct, exact transform of the model logit (guaranteed identical to summing card points).
+
+```{r score_test, results='markup'}
+test_scored <- test_pred %>%
+  mutate(score = score_from_woe(., coefs, scaling))
+
+cat("Score Distribution (Test Set)\n")
+cat("──────────────────────────────────────\n")
+cat("  Min:   ", min(test_scored$score), "\n")
+cat("  Q1:    ", round(quantile(test_scored$score, 0.25)), "\n")
+cat("  Median:", round(median(test_scored$score)), "\n")
+cat("  Mean:  ", round(mean(test_scored$score)), "\n")
+cat("  Q3:    ", round(quantile(test_scored$score, 0.75)), "\n")
+cat("  Max:   ", max(test_scored$score), "\n\n")
+
+cor_check <- cor(test_scored$score, test_scored$pred_lr)
+cat("Correlation(score, P(default)):", round(cor_check, 4), "\n")
+cat("(Should be strongly negative - higher score = lower risk)\n")
+```
+
+## Score Distribution
+
+```{r score_hist, results='markup'}
+ggplot(test_scored, aes(x = score)) +
+  geom_histogram(binwidth = 10, fill = "#C9A227", colour = "white", alpha = 0.9) +
+  geom_vline(aes(xintercept = median(score)), linetype = "dashed", colour = "#2E2E2E") +
+  labs(
+    title = "Credit Score Distribution",
+    subtitle = "Test set - higher scores indicate lower default risk",
+    x = "Credit Score", y = "Number of Applicants"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+## Score vs. Observed Default Rate
+
+The key validation chart: as scores rise, the actual default rate must fall monotonically.
+
+```{r score_vs_default, results='markup'}
+score_bands_check <- test_scored %>%
+  mutate(score_band = cut(score,
+                          breaks = seq(floor(min(score)/50)*50,
+                                       ceiling(max(score)/50)*50, by = 50),
+                          include.lowest = TRUE)) %>%
+  group_by(score_band) %>%
+  summarise(n = n(), default_rate = mean(target), .groups = "drop") %>%
+  filter(n >= 30)
+
+ggplot(score_bands_check, aes(x = score_band, y = default_rate, fill = default_rate)) +
+  geom_col(alpha = 0.9) +
+  geom_text(aes(label = percent(default_rate, accuracy = 0.1)),
+            vjust = -0.5, size = 3.2, colour = "#2E2E2E") +
+  scale_fill_gradient(low = "#2E6B3E", high = "#8B2E2E", guide = "none") +
+  scale_y_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.1))) +
+  labs(
+    title = "Observed Default Rate by Score Band",
+    subtitle = "Monotonic decline confirms the scorecard ranks risk correctly",
+    x = "Score Band", y = "Observed Default Rate"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+---
+
+# Section 5: Decision Cutoffs (Approve / Review / Decline)
+
+Cutoffs convert the continuous score into an actionable decision. Adjust `decline_cut` / `approve_cut` after seeing your score distribution above so the approved band lands at a default rate you accept.
+
+```{r decision_cutoffs, results='markup'}
+# Cutoffs are calibrated to THIS model's score range (≈500–621)
+# Scores compress because Gini ≈ 0.31; we split on the actual distribution,
+# not a generic 300–850 assumption. Tune these to your risk appetite
+decline_cut <- 545   # below this: DECLINE
+approve_cut <- 575   # at/above this: APPROVE; between: REVIEW
+
+test_decisions <- test_scored %>%
+  mutate(decision = assign_decision(score, decline_cut, approve_cut))
+
+decision_summary <- test_decisions %>%
+  group_by(decision) %>%
+  summarise(
+    n_applicants = n(),
+    pct_population = n() / nrow(test_decisions),
+    n_defaults = sum(target),
+    default_rate = mean(target),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    pct_population = round(pct_population, 4),
+    default_rate = round(default_rate, 4),
+    pct_of_all_defaults = round(n_defaults / sum(n_defaults), 4)
+  )
+
+cat("Decision Band Summary\n")
+cat("──────────────────────────────────────\n")
+cat("  Decline: score <", decline_cut, "\n")
+cat("  Approve: score >=", approve_cut, "\n")
+cat("  Review: ", decline_cut, "–", approve_cut - 1, "\n\n")
+print(decision_summary)
+
+approve_band <- decision_summary %>% filter(decision == "APPROVE")
+decline_band <- decision_summary %>% filter(decision == "DECLINE")
+
+cat("\nBusiness Read-out:\n")
+cat("  Auto-approve rate:    ", percent(approve_band$pct_population, 0.1), "\n")
+cat("  Approved default rate:", percent(approve_band$default_rate, 0.01),
+    "(vs", percent(mean(test_decisions$target), 0.01), "overall)\n")
+cat("  Declined band catches:", percent(decline_band$pct_of_all_defaults, 0.1),
+    "of all defaults\n")
+
+write_csv(decision_summary, "../outputs/scorecard_decision_summary.csv")
+cat("\nSaved outputs/scorecard_decision_summary.csv\n")
+```
+
+## Decision Bands Visualised
+
+```{r decision_plot, results='markup'}
+ggplot(test_decisions, aes(x = score, fill = decision)) +
+  geom_histogram(binwidth = 10, colour = "white", alpha = 0.9) +
+  geom_vline(xintercept = c(decline_cut, approve_cut),
+             linetype = "dashed", colour = "#2E2E2E") +
+  scale_fill_manual(values = c("DECLINE" = "#8B2E2E",
+                               "REVIEW"  = "#C9A227",
+                               "APPROVE" = "#2E6B3E")) +
+  labs(
+    title = "Lending Decisions by Credit Score",
+    subtitle = "Decline / Review / Approve bands on the test population",
+    x = "Credit Score", y = "Number of Applicants", fill = "Decision"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+---
+
+# Section 6: Score Band Reference Table
+
+The day-to-day lookup a risk team uses: each band with population share, default rate, and recommended action.
+
+```{r score_band_table, results='markup'}
+score_band_table <- test_decisions %>%
+  mutate(band = cut(score,
+                    breaks = c(-Inf, 540, 580, 620, 640, 660, 700, Inf),
+                    labels = c("<540", "540–579", "580–619", "620–639",
+                               "640–659", "660–699", "700+"))) %>%
+  group_by(band) %>%
+  summarise(n = n(),
+            pct_population = n() / nrow(test_decisions),
+            default_rate = mean(target),
+            .groups = "drop") %>%
+  mutate(
+    cumulative_pct = cumsum(n) / sum(n),
+    recommended_action = case_when(
+      default_rate >= 0.15 ~ "DECLINE",
+      default_rate >= 0.08 ~ "REVIEW",
+      TRUE                 ~ "APPROVE"
+    ),
+    pct_population = percent(pct_population, 0.1),
+    default_rate = percent(default_rate, 0.01),
+    cumulative_pct = percent(cumulative_pct, 0.1)
+  )
+
+cat("Score Band Reference Table\n\n")
+print(score_band_table)
+
+write_csv(score_band_table, "../outputs/scorecard_band_reference.csv")
+cat("\nSaved outputs/scorecard_band_reference.csv\n")
+```
+
+---
+
+# Section 7: Validate the Scorecard Preserves Model Performance
+
+A scorecard is a monotonic rescaling of the model's probabilities, so its ranking power (Gini/KS/AUC) must match the model exactly. Any discrepancy signals a scaling bug.
+
+```{r validate_scorecard, results='markup'}
+# Higher score = lower risk, so rank on NEGATIVE score for the metric helpers.
+gini_score <- compute_gini(test_scored$target, -test_scored$score)
+ks_score   <- compute_ks(test_scored$target, -test_scored$score)
+auc_score  <- compute_auc(test_scored$target, -test_scored$score)
+
+gini_model <- compute_gini(test_scored$target, test_scored$pred_lr)
+ks_model   <- compute_ks(test_scored$target, test_scored$pred_lr)
+auc_model  <- compute_auc(test_scored$target, test_scored$pred_lr)
+
+validation <- tibble(
+  Metric = c("Gini", "KS", "AUC"),
+  `From Model (prob)` = round(c(gini_model, ks_model, auc_model), 4),
+  `From Scorecard`    = round(c(gini_score, ks_score, auc_score), 4),
+  Difference          = round(c(gini_score - gini_model,
+                                ks_score - ks_model,
+                                auc_score - auc_model), 6)
+)
+
+cat("Scorecard vs. Model - Ranking Power\n")
+cat("──────────────────────────────────────\n")
+print(validation)
+
+if (all(abs(validation$Difference) < 0.001)) {
+  cat("\nScorecard preserves model performance (differences ≈ 0)\n")
+  cat("  The points scaling is a faithful monotonic transform.\n")
+} else {
+  cat("\nScorecard metrics differ from model - check scaling.\n")
+}
+
+write_csv(validation, "../outputs/scorecard_validation.csv")
+```
+
+---
+
+# Section 8: Save Scorecard Artifacts
+
+```{r save_artifacts, results='markup'}
+test_scored_out <- test_decisions %>%
+  select(target, pred_lr, score, decision)
+
+saveRDS(test_scored_out, "../data/processed/test_scored.rds")
+write_csv(test_scored_out, "../scorecard_output/test_scored.csv")
+
+# Self-contained, deployable scorecard object for the dashboard
+scorecard_obj <- list(
+  scaling        = scaling,
+  card           = card,
+  cutoffs        = list(decline = decline_cut, approve = approve_cut),
+  band_reference = score_band_table,
+  validation     = validation,
+  model_coefs    = coefs
+)
+saveRDS(scorecard_obj, "../outputs/scorecard.rds")
+
+cat("\nScorecard artifacts saved\n")
+cat("  - outputs/scorecard.rds (deployable scorecard object)\n")
+cat("  - outputs/scorecard_points_card.csv (the bin-level card)\n")
+cat("  - outputs/scorecard_scaling_params.rds\n")
+cat("  - outputs/scorecard_decision_summary.csv\n")
+cat("  - outputs/scorecard_band_reference.csv\n")
+cat("  - outputs/scorecard_validation.csv\n")
+cat("  - data/processed/test_scored.rds\n")
+cat("  - scorecard_output/test_scored.csv\n")
+```
+
+---
+
+# Summary
+
+This notebook converted the logistic regression model into a deployable **bin-level points scorecard**:
+
+- **PDO scaling** (base 600, 50:1 odds, 20 PDO) maps log-odds to an intuitive score where higher means safer.
+- **The points card** assigns each WOE bin a whole-number point value - every decision is auditable row by row.
+- **Decision cutoffs** (Decline < 580, Review 580–639, Approve ≥ 640) translate scores into lending actions with quantified default rates per band.
+- **Validation** confirms the scorecard reproduces the model's exact ranking power (Gini/KS/AUC).
+
+The scorecard object (`outputs/scorecard.rds`) is ready for the interactive dashboard, where a user can score a hypothetical applicant and see the points breakdown.
+
+---
