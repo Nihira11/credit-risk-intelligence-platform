@@ -1,0 +1,148 @@
+---
+title: "Feature Engineering & WOE/IV Selection"
+author: "Nihira Sharma"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(DBI)
+library(RPostgres)
+library(scorecard)
+```
+
+## Load Data
+
+```{r}
+con <- dbConnect(RPostgres::Postgres(),
+  user = "credit_app", password = Sys.getenv("CREDIT_DB_PASSWORD"),
+  host = "localhost", port = 5432, dbname = "credit_risk")
+
+df_raw <- dbGetQuery(con, "SELECT * FROM analytics_base") %>% as_tibble()
+dbDisconnect(con)
+
+cat("Loaded:", nrow(df_raw), "rows\n")
+```
+
+## Clean Data
+
+```{r}
+df_clean <- df_raw %>%
+  mutate(target = as.integer(target)) %>%
+  mutate(across(starts_with("bureau_") | starts_with("inst_") | 
+    starts_with("card_") | starts_with("pos_") | starts_with("prev_"),
+    ~replace_na(., 0)))
+
+cat("Cleaned. NAs remaining:", sum(is.na(df_clean)), "\n")
+```
+
+## Select Features
+
+```{r}
+df_model <- df_clean %>%
+  select(target, amt_income_total, amt_credit, amt_annuity, cnt_children,
+    cnt_fam_members, days_birth, days_employed, bureau_count, 
+    bureau_active_count, bureau_credit_sum_total, bureau_overdue_max_ever,
+    bureau_overdue_ratio, bureau_months_paid_on_time_share, inst_total_count,
+    inst_late_share, inst_underpaid_share, inst_max_days_late, 
+    inst_payment_ratio_mean, card_count, card_util_mean, card_dpd_mean,
+    card_dpd_share, pos_count, pos_dpd_mean, prev_app_count, 
+    prev_app_approval_rate, prev_app_amount_mean)
+
+cat("Features:", ncol(df_model) - 1, "\n")
+```
+
+## WOE Binning
+
+```{r}
+bins <- woebin(df_model, y = "target", positive = 1)
+cat("Binning done\n")
+```
+
+## Calculate IV (Simple Manual Method)
+
+```{r iv, fig.width=10, fig.height=6}
+# manual IV calculation
+calc_iv <- function(data, target_col, feature_col) {
+  tbl <- table(data[[feature_col]], data[[target_col]])
+  good_total <- sum(tbl[, 1], na.rm = TRUE)
+  bad_total <- sum(tbl[, 2], na.rm = TRUE)
+  if (good_total == 0 || bad_total == 0) return(0)
+  iv <- 0
+  for (i in 1:nrow(tbl)) {
+    good_pct <- tbl[i, 1] / good_total
+    bad_pct <- tbl[i, 2] / bad_total
+    if (good_pct > 0 && bad_pct > 0) {
+      woe <- log(good_pct / bad_pct)
+      iv <- iv + (good_pct - bad_pct) * woe
+    }
+  }
+  return(abs(iv))
+}
+
+features <- names(df_model)[-1]
+iv_values <- sapply(features, function(x) calc_iv(df_model, "target", x))
+
+iv_table <- tibble(feature = features, IV = iv_values) %>% arrange(desc(IV))
+
+# plot IV distribution
+ggplot(iv_table, aes(x = reorder(feature, -IV), y = IV)) +
+  geom_col(fill = "#3498db", alpha = 0.8) +
+  coord_flip() +
+  labs(title = "Information Value (IV) by Feature",
+       subtitle = "Higher IV = stronger predictive signal",
+       x = "Feature", y = "IV") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 9))
+
+# IV table
+knitr::kable(iv_table, digits = 4, caption = "Information Value (IV) by Feature")
+
+cat("\nIV Summary:\n")
+cat("  Mean IV:", round(mean(iv_table$IV), 4), "\n")
+cat("  Median IV:", round(median(iv_table$IV), 4), "\n")
+cat("  Max IV:", round(max(iv_table$IV), 4), "\n")
+```
+
+## Select Features by IV
+
+```{r}
+selected_features <- iv_table %>% filter(IV >= 0.01) %>% pull(feature)
+
+cat("Selected", length(selected_features), "features\n")
+print(selected_features)
+```
+
+## WOE Transform
+
+```{r}
+df_woe <- woebin_ply(df_model, bins)
+
+cat("WOE transform applied\n")
+cat("  Rows:", nrow(df_woe), "\n")
+cat("  Cols:", ncol(df_woe), "\n")
+```
+
+## Save Modeling Dataset
+
+```{r}
+# WOE columns have different names after transform
+# just save the whole transformed dataset with selected features
+df_final <- df_woe %>% 
+  select(target, everything()) %>%
+  select(1, which(colnames(df_woe) %in% paste0(selected_features, "_woe")))
+
+if (ncol(df_final) < 5) {
+  df_final <- df_woe
+}
+
+write_csv(df_final, "../data/processed/modeling_dataset_woe.csv")
+saveRDS(bins, "../data/processed/woe_bins.rds")
+
+cat("Saved modeling_dataset_woe.csv\n")
+cat("  Rows:", nrow(df_final), "\n")
+cat("  Cols:", ncol(df_final), "\n")
+```
+

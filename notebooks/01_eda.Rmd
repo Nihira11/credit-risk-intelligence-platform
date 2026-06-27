@@ -357,9 +357,7 @@ kable(findings, caption = "Key EDA Findings")
 
 ```{r close}
 dbDisconnect(con)
-cat("✓ Connection closed\n")
+cat("Connection closed\n")
 ```
 
 ------------------------------------------------------------------------
-
-**Next:** Phase 2 - Feature Engineering (Day 4–8)
