@@ -297,9 +297,9 @@ The day-to-day lookup a risk team uses: each band with population share, default
 ```{r score_band_table, results='markup'}
 score_band_table <- test_decisions %>%
   mutate(band = cut(score,
-                    breaks = c(-Inf, 540, 580, 620, 640, 660, 700, Inf),
-                    labels = c("<540", "540–579", "580–619", "620–639",
-                               "640–659", "660–699", "700+"))) %>%
+                    breaks = c(-Inf, 520, 540, 555, 570, 585, 600, Inf),
+                    labels = c("<520", "520–539", "540–554", "555–569",
+                               "570–584", "585–599", "600+"))) %>%
   group_by(band) %>%
   summarise(n = n(),
             pct_population = n() / nrow(test_decisions),
@@ -308,8 +308,8 @@ score_band_table <- test_decisions %>%
   mutate(
     cumulative_pct = cumsum(n) / sum(n),
     recommended_action = case_when(
-      default_rate >= 0.15 ~ "DECLINE",
-      default_rate >= 0.08 ~ "REVIEW",
+      default_rate >= 0.12 ~ "DECLINE",
+      default_rate >= 0.05 ~ "REVIEW",
       TRUE                 ~ "APPROVE"
     ),
     pct_population = percent(pct_population, 0.1),
@@ -369,7 +369,7 @@ write_csv(validation, "../outputs/scorecard_validation.csv")
 
 ```{r save_artifacts, results='markup'}
 test_scored_out <- test_decisions %>%
-  select(target, pred_lr, score, decision)
+  select(SK_ID_CURR, target, pred_lr, score, decision)
 
 saveRDS(test_scored_out, "../data/processed/test_scored.rds")
 write_csv(test_scored_out, "../scorecard_output/test_scored.csv")
@@ -404,7 +404,7 @@ This notebook converted the logistic regression model into a deployable **bin-le
 
 - **PDO scaling** (base 600, 50:1 odds, 20 PDO) maps log-odds to an intuitive score where higher means safer.
 - **The points card** assigns each WOE bin a whole-number point value - every decision is auditable row by row.
-- **Decision cutoffs** (Decline < 580, Review 580–639, Approve ≥ 640) translate scores into lending actions with quantified default rates per band.
+- **Decision cutoffs** (Decline < 545, Review 545–574, Approve ≥ 575) translate scores into lending actions with quantified default rates per band.
 - **Validation** confirms the scorecard reproduces the model's exact ranking power (Gini/KS/AUC).
 
 The scorecard object (`outputs/scorecard.rds`) is ready for the interactive dashboard, where a user can score a hypothetical applicant and see the points breakdown.
