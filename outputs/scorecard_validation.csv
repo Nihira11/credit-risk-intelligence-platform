@@ -1,0 +1,4 @@
+Metric,From Model (prob),From Scorecard,Difference
+Gini,0.3126,0.3125,-7.3e-5
+KS,0.2272,0.2252,-0.002017
+AUC,0.6563,0.6563,-3.6e-5

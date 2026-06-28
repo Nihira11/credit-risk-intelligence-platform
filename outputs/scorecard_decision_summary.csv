@@ -1,0 +1,4 @@
+decision,n_applicants,pct_population,n_defaults,default_rate,pct_of_all_defaults
+DECLINE,14726,0.1596,2389,0.1622,0.3196
+REVIEW,56921,0.617,4336,0.0762,0.5801
+APPROVE,20606,0.2234,749,0.0363,0.1002

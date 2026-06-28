@@ -1,0 +1,17 @@
+term,estimate,std.error,statistic,p.value,significant
+prev_app_approval_rate_woe,0.9164,0.031224637267040417,29.348,0,***
+days_employed_woe,0.6861,0.029378845812223952,23.352,0,***
+days_birth_woe,0.5455,0.03340699037549599,16.33,0,***
+amt_credit_woe,0.6207,0.040668612608285463,15.262,0,***
+bureau_credit_sum_total_woe,0.9194,0.06579590917360859,13.974,0,***
+bureau_overdue_max_ever_woe,0.8831,0.07185309685685183,12.29,0,***
+bureau_months_paid_on_time_share_woe,0.8595,0.07798530803079018,11.021,0,***
+inst_late_share_woe,0.5198,0.06383632744735446,8.142,0,***
+inst_payment_ratio_mean_woe,0.4618,0.06712964805423655,6.879,0,***
+prev_app_amount_mean_woe,0.4293,0.06329277345224486,6.782,0,***
+amt_income_total_woe,0.5255,0.08577349019454757,6.126,0,***
+amt_annuity_woe,0.3424,0.05927500864313574,5.776,0,***
+inst_max_days_late_woe,0.1904,0.0722864373761985,2.633,0.0085,***
+card_dpd_share_woe,1.6675,1.6650243482696006,1.002,0.3166,
+pos_dpd_mean_woe,0.0587,0.07430316290457058,0.79,0.4294,
+inst_underpaid_share_woe,0.0096,0.0691092600895559,0.139,0.8894,

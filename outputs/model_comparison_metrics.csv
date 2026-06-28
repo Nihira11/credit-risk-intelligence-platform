@@ -1,0 +1,7 @@
+Metric,Logistic,XGBoost,Difference
+Gini (Train),0.3147,0.3837,0.069
+Gini (Test),0.3126,0.3238,0.0112
+KS (Train),0.2343,0.2777,0.0434
+KS (Test),0.2272,0.233,0.0058
+AUC (Train),0.6573,0.6918,0.0345
+AUC (Test),0.6563,0.6619,0.0056
