@@ -122,7 +122,7 @@ ggplot(app, aes(x = factor(target))) +
 
 ### 5.1 Missing Data in application_train
 
-```{r missingness_app}
+```{r missingness_app, fig.height=12, fig.width=9}
 missing_app <- app %>%
   summarise(across(everything(), 
                    list(missing_pct = ~sum(is.na(.)) / n() * 100))) %>%

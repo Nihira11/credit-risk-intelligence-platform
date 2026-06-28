@@ -11,7 +11,7 @@
 
 <meta name="author" content="Nihira Sharma" />
 
-<meta name="date" content="2026-06-27" />
+<meta name="date" content="2026-06-29" />
 
 <title>Feature Engineering &amp; WOE/IV Selection</title>
 
@@ -353,7 +353,7 @@ display: none;
 <h1 class="title toc-ignore">Feature Engineering &amp; WOE/IV
 Selection</h1>
 <h4 class="author">Nihira Sharma</h4>
-<h4 class="date">2026-06-27</h4>
+<h4 class="date">2026-06-29</h4>
 
 </div>
 
@@ -401,11 +401,11 @@ cat(&quot;Features:&quot;, ncol(df_model) - 1, &quot;\n&quot;)</code></pre>
 <h2>WOE Binning</h2>
 <pre class="r"><code>bins &lt;- woebin(df_model, y = &quot;target&quot;, positive = 1,
                x = setdiff(names(df_model), c(&quot;target&quot;, &quot;SK_ID_CURR&quot;)))</code></pre>
-<pre><code>## ✔ Binning on 307511 rows and 28 columns in 00:00:13</code></pre>
+<pre><code>## ✔ Binning on 307511 rows and 28 columns in 00:00:10</code></pre>
 <pre class="r"><code>cat(&quot;Binning done\n&quot;)</code></pre>
 <pre><code>## Binning done</code></pre>
 <pre class="r"><code>df_woe &lt;- woebin_ply(df_model, bins)</code></pre>
-<pre><code>## ✔ Woe transformating on 307511 rows and 27 columns in 00:00:06</code></pre>
+<pre><code>## ✔ Woe transformating on 307511 rows and 27 columns in 00:00:05</code></pre>
 <pre class="r"><code>stopifnot(&quot;SK_ID_CURR&quot; %in% names(df_woe))   # safety check</code></pre>
 </div>
 <div id="calculate-iv-simple-manual-method" class="section level2">
