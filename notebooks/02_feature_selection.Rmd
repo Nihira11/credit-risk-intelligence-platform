@@ -42,14 +42,15 @@ cat("Cleaned. NAs remaining:", sum(is.na(df_clean)), "\n")
 
 ```{r}
 df_model <- df_clean %>%
-  select(target, amt_income_total, amt_credit, amt_annuity, cnt_children,
+  select(sk_id_curr, target, amt_income_total, amt_credit, amt_annuity, cnt_children,
     cnt_fam_members, days_birth, days_employed, bureau_count, 
     bureau_active_count, bureau_credit_sum_total, bureau_overdue_max_ever,
     bureau_overdue_ratio, bureau_months_paid_on_time_share, inst_total_count,
     inst_late_share, inst_underpaid_share, inst_max_days_late, 
     inst_payment_ratio_mean, card_count, card_util_mean, card_dpd_mean,
     card_dpd_share, pos_count, pos_dpd_mean, prev_app_count, 
-    prev_app_approval_rate, prev_app_amount_mean)
+    prev_app_approval_rate, prev_app_amount_mean) %>%
+    rename(SK_ID_CURR = sk_id_curr)
 
 cat("Features:", ncol(df_model) - 1, "\n")
 ```
@@ -57,8 +58,12 @@ cat("Features:", ncol(df_model) - 1, "\n")
 ## WOE Binning
 
 ```{r}
-bins <- woebin(df_model, y = "target", positive = 1)
+bins <- woebin(df_model, y = "target", positive = 1,
+               x = setdiff(names(df_model), c("target", "SK_ID_CURR")))
 cat("Binning done\n")
+
+df_woe <- woebin_ply(df_model, bins)
+stopifnot("SK_ID_CURR" %in% names(df_woe))   # safety check
 ```
 
 ## Calculate IV (Simple Manual Method)
@@ -132,7 +137,8 @@ cat("  Cols:", ncol(df_woe), "\n")
 # just save the whole transformed dataset with selected features
 df_final <- df_woe %>% 
   select(target, everything()) %>%
-  select(1, which(colnames(df_woe) %in% paste0(selected_features, "_woe")))
+  select(SK_ID_CURR, target,
+         all_of(paste0(selected_features, "_woe")))
 
 if (ncol(df_final) < 5) {
   df_final <- df_woe
