@@ -1,0 +1,73 @@
+/* ==========================================================================
+   Credit Risk Intelligence Platform - dashboard styles
+   Uses bslib's Bootstrap CSS variables so it follows whichever palette
+   is active in pages/theme.R automatically
+   ========================================================================== */
+
+.navbar-brand {
+  font-family: "Spectral", serif;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.navbar-tag {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.85rem;
+  padding-right: 8px;
+}
+
+.card-header {
+  font-weight: 600;
+  color: var(--bs-body-color);
+  border-bottom: 2px solid var(--bs-primary);
+  background: transparent;
+}
+
+.value-box .value-box-value {
+  font-family: "Spectral", serif;
+  font-weight: 700;
+}
+
+.decision-box {
+  text-align: center;
+  padding: 16px 12px;
+}
+
+.score-big {
+  font-family: "Spectral", serif;
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--bs-body-color);
+}
+
+.decision-badge {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 6px 20px;
+  border-radius: 20px;
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.prob-line {
+  margin-top: 14px;
+  color: var(--bs-secondary-color, #555);
+  font-size: 0.95rem;
+}
+
+.note-green {
+  padding: 10px 12px;
+  color: #2E6B3E;
+  font-size: 0.9rem;
+}
+
+.btn-secondary:hover {
+  background-color: var(--bs-primary);
+  border-color: var(--bs-primary);
+}
+
+table.dataTable thead th {
+  border-bottom: 2px solid var(--bs-primary) !important;
+}
